@@ -20,7 +20,7 @@ final class Store {
         return !s.isEmpty() && smsReady(c);
     }
     static boolean smsReady(Context c) {
-        return prefs(c).getBoolean("enabled",false) && prefs(c).getString("pin","").matches("[0-9]{6,12}");
+        return prefs(c).getBoolean("openSmsConsent",false);
     }
     static synchronized void log(Context c,String s) {
         String line=new java.text.SimpleDateFormat("HH:mm:ss",Locale.ROOT).format(new Date())+" "+s+"\n";

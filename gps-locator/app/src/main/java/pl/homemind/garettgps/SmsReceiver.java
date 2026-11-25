@@ -21,10 +21,7 @@ public final class SmsReceiver extends BroadcastReceiver {
             body.append(m.getMessageBody());
         }
         String cmd=body.toString().trim().replaceAll("\\s+"," ").toUpperCase(Locale.ROOT);
-        String pin=Store.prefs(c).getString("pin","");
-        if(!pin.matches("[0-9]{6,12}") || !cmd.endsWith(" "+pin)) return;
-        cmd=cmd.substring(0,cmd.length()-pin.length()-1);
-        if(!Arrays.asList("GPS","GPS FAST","GPS STATUS","GPS LAST","GPS STOP").contains(cmd)) return;
+        if(!Arrays.asList("GPS","GPS FAST","GPS STATUS","GPS STOP").contains(cmd)) return;
         long now=SystemClock.elapsedRealtime();
         String key=sender+":"+cmd;
         synchronized(recent) {
@@ -38,7 +35,6 @@ public final class SmsReceiver extends BroadcastReceiver {
             reply(c,sender,"GPS "+(GpsService.active?"POMIAR":"GOTOWY")+"; bateria "+Store.battery(c)+"%; "+(GpsService.active?("sat "+GpsService.visible+"/"+GpsService.used+"; max "+Math.round(GpsService.strongest)+"dBHz; odczyty "+GpsService.raw+"; NET "+GpsService.networkStatus):Store.prefs(c).getString("lastDiagnostic","brak pomiaru")));
             return;
         }
-        if(cmd.equals("GPS LAST")) { reply(c,sender,Store.last(c)); return; }
         if(cmd.equals("GPS STOP") && !GpsService.active) { reply(c,sender,"GPS: brak aktywnego pomiaru"); return; }
         try {
             c.startForegroundService(new Intent(c,GpsService.class).putExtra("sender",sender).putExtra("cmd",cmd));

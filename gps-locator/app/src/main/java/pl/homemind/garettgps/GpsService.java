@@ -8,7 +8,9 @@ import android.os.*;
 import java.util.*;
 
 public final class GpsService extends Service implements LocationListener {
-    static volatile boolean active=false;
+    static volatile boolean active=false, diagnostic=false;
+    static volatile int restarts=0;
+    static volatile long lastFixAt=0;
     static volatile String state="GPS OFF";
     static volatile float accuracy=Float.NaN;
     static volatile long started=0,firstFix=0,limitMs=900000,lastDuration=0;
@@ -29,14 +31,19 @@ public final class GpsService extends Service implements LocationListener {
     private PowerManager.WakeLock lock;
     private Stabilizer st;
     private boolean fast,manual,closing,gpsRequested,networkRequested;
+    private long lastGpsCallback,lastRestart,requestAt;
+    private final Runnable manualTimeout=()->{manual=false;diagnostic=false;if(senders.isEmpty())finish(null,"LIMIT TESTU");};
     private Location networkFix;
     private final Map<String,Location> preliminary=new HashMap<>();
-    private final Runnable timeout=()->finish(bestAvailable(),"TIMEOUT");
+    private final Runnable timeout=()->completeRequests(bestAvailable(),"TIMEOUT");
     private final Runnable coarseCheck=()->sendPreliminary();
     private final Runnable tick=new Runnable(){public void run(){
         if(!active || closing)return;
         Store.log(GpsService.this,"GPS "+((SystemClock.elapsedRealtime()-started)/1000)+"s: sat "+visible+"/"+used+", sygnal "+signalCount+", max "+Math.round(strongest)+" dBHz, odczyty "+raw+", odrzucone "+rejected+(st==null?"":", "+st.reason));
-        h.postDelayed(this,30000);
+        long now=SystemClock.elapsedRealtime();
+        if(now-lastRestart>=90000 && (!gpsRequested || now-lastGpsCallback>=90000)) retryProviders();
+        if(lastFixAt>0 && now-lastFixAt>10000 && gpsRequested){state="UTRATA FIX";accuracy=Float.NaN;}
+        h.postDelayed(this,5000);
     }};
     private final GnssStatus.Callback gnss=new GnssStatus.Callback() {
         @Override public void onSatelliteStatusChanged(GnssStatus g) {
@@ -58,15 +65,24 @@ public final class GpsService extends Service implements LocationListener {
         boolean local=sender==null;
         if(!local && !Store.allowed(this,sender)){if(!active)stopSelf();return START_NOT_STICKY;}
         if("GPS STOP".equals(cmd)) {
-            if(local){manual=false;if(senders.isEmpty())finish(null,"ANULOWANO");}
-            else {senders.add(sender);finish(null,"ANULOWANO");}
+            if(local){manual=false;diagnostic=false;h.removeCallbacks(manualTimeout);if(senders.isEmpty())finish(null,"ANULOWANO");}
+            else {senders.remove(sender);preliminary.remove(sender);SmsReceiver.reply(this,sender,"GPS: anulowano zapytanie");if(!manual&&senders.isEmpty())finish(null,"ANULOWANO");}
             return START_NOT_STICKY;
         }
-        if(!local) {if(senders.size()>=8 && !senders.contains(sender)){SmsReceiver.reply(this,sender,"GPS: zbyt wiele zapytan; sprobuj pozniej");return START_NOT_STICKY;} senders.add(sender);} else manual=true;
-        if(active) {if(!"GPS FAST".equals(cmd))fast=false;sendPreliminary();return START_NOT_STICKY;}
+        if(!local) {
+            if(senders.size()>=8 && !senders.contains(sender)){SmsReceiver.reply(this,sender,"GPS: zajety");return START_NOT_STICKY;}
+            if(senders.isEmpty()){requestAt=SystemClock.elapsedRealtime();fast="GPS FAST".equals(cmd);}
+            else if(!"GPS FAST".equals(cmd))fast=false;
+            senders.add(sender);
+        } else {manual=true;diagnostic=true;}
+        if(active) {
+            if(local)scheduleManual();
+            else {scheduleSms();ensureLock();}
+            return START_NOT_STICKY;
+        }
         fast="GPS FAST".equals(cmd);
         active=true;closing=false;state="SZUKANIE";accuracy=Float.NaN;started=SystemClock.elapsedRealtime();
-        firstFix=0;visible=used=samples=raw=rejected=peakVisible=peakUsed=signalCount=peakSignalCount=0;strongest=peakStrongest=0;gnssUpdates=0;sats=new Sat[0];st=new Stabilizer();
+        firstFix=lastFixAt=0;restarts=0;lastRestart=lastGpsCallback=started;visible=used=samples=raw=rejected=peakVisible=peakUsed=signalCount=peakSignalCount=0;strongest=peakStrongest=0;gnssUpdates=0;sats=new Sat[0];st=new Stabilizer();
         limitMs=Math.max(300000L,Math.min(1200000L,Store.prefs(this).getInt("timeoutMinutesV2",15)*60000L));
         gpsRequested=networkRequested=false;networkFix=null;networkRaw=0;networkStatus="Sprawdzanie";preliminary.clear();
         Store.log(this,"Start GPS + NETWORK, limit "+limitMs/1000+"s");
@@ -75,8 +91,8 @@ public final class GpsService extends Service implements LocationListener {
             lm=(LocationManager)getSystemService(LOCATION_SERVICE);
             Store.log(this,"Dostawcy: "+lm.getAllProviders());
             lock=((PowerManager)getSystemService(POWER_SERVICE)).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"GarettGPS:session");
-            lock.setReferenceCounted(false);lock.acquire(limitMs+15000L);
-            h.postDelayed(timeout,limitMs);h.postDelayed(tick,30000L);
+            lock.setReferenceCounted(false);ensureLock();
+            if(manual)scheduleManual();if(!senders.isEmpty())scheduleSms();h.postDelayed(tick,5000L);
             try{
                 if(lm.getAllProviders().contains(LocationManager.NETWORK_PROVIDER) && lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)){
                     lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER,15000,0,this,Looper.getMainLooper());
@@ -90,9 +106,7 @@ public final class GpsService extends Service implements LocationListener {
                     lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,1000,0,this,Looper.getMainLooper());gpsRequested=true;
                 }
             }catch(RuntimeException e){Store.log(this,"GPS blad: "+e.getClass().getSimpleName());}
-            if(!gpsRequested&&!networkRequested){finish(null,"Brak dostawcy");return START_NOT_STICKY;}
-            if(!gpsRequested){state="TYLKO NETWORK";h.removeCallbacks(timeout);limitMs=60000;h.postDelayed(timeout,limitMs);}
-            h.postDelayed(coarseCheck,30000L);
+            if(!gpsRequested)state=networkRequested?"TYLKO NETWORK":"BRAK DOSTAWCY";
         } catch(RuntimeException e){finish(null,"BLAD "+e.getClass().getSimpleName());}
         return START_NOT_STICKY;
     }
@@ -100,13 +114,15 @@ public final class GpsService extends Service implements LocationListener {
         if(!active || closing || st==null)return;
         if(LocationManager.NETWORK_PROVIDER.equals(l.getProvider())){acceptNetwork(l);return;}
         if(!LocationManager.GPS_PROVIDER.equals(l.getProvider()))return;
-        raw++;
+        lastGpsCallback=SystemClock.elapsedRealtime();raw++;
         if(!st.accept(l)){rejected++;if(rejected<=3)Store.log(this,"Odrzucony odczyt: "+st.reason);return;}
-        accuracy=l.getAccuracy();samples=st.window.size();state="STABILIZACJA";
+        accuracy=l.getAccuracy();samples=st.window.size();lastFixAt=l.getElapsedRealtimeNanos()/1000000L;state="STABILIZACJA";
         long elapsed=SystemClock.elapsedRealtime()-started;
         if(firstFix==0){firstFix=elapsed;Store.log(this,"Pierwszy fix: "+elapsed/1000+" s");}
         boolean stable=st.stable(10) || (elapsed>=30000 && st.stable(20)) || (elapsed>=90000 && st.stable(35));
-        if((fast && l.getAccuracy()<=20) || stable)finish(l,l.getAccuracy()<=20?"OK":"SLABY");
+        if(stable){state="FIX";if(raw==6||raw%15==0)Store.save(this,l);}
+        if(!senders.isEmpty() && lastFixAt>=requestAt && ((fast && l.getAccuracy()<=20)||stable))
+            completeRequests(l,l.getAccuracy()<=20?"OK":"SLABY");
     }
     private boolean validNetwork(Location l){
         if(l==null || !l.hasAccuracy() || !Float.isFinite(l.getAccuracy()) || l.getAccuracy()<=0 || l.isFromMockProvider() ||
@@ -125,7 +141,7 @@ public final class GpsService extends Service implements LocationListener {
         boolean first=networkFix==null;
         networkFix=new Location(l);networkStatus="OK +/-"+Math.round(l.getAccuracy())+"m";
         if(first)Store.log(this,"NETWORK pierwszy odczyt: "+networkStatus);
-        if(!gpsRequested){finish(networkFix,"PRZYBLIZONA");return;}
+        if(!gpsRequested && !senders.isEmpty() && l.getElapsedRealtimeNanos()/1000000L>=requestAt){completeRequests(networkFix,"PRZYBLIZONA");return;}
         sendPreliminary();
     }
     private String locationMessage(Location l,String why){
@@ -135,8 +151,8 @@ public final class GpsService extends Service implements LocationListener {
           net?"WiFi/LBS":"GPS",why,Math.round(l.getAccuracy()),age,Store.battery(this),l.getLatitude(),l.getLongitude());
     }
     private void sendPreliminary(){
-        if(!active||closing||SystemClock.elapsedRealtime()-started<30000)return;
-        Location l=freshNetwork();if(l==null)return;
+        if(!active||closing||senders.isEmpty()||SystemClock.elapsedRealtime()-requestAt<30000)return;
+        Location l=freshNetwork();if(l==null||l.getElapsedRealtimeNanos()/1000000L<requestAt)return;
         Location gps=st==null?null:st.recentBest();
         if(gps!=null&&gps.getAccuracy()<=l.getAccuracy())return;
         for(String n:senders)if(!preliminary.containsKey(n)&&Store.allowed(this,n)){
@@ -149,11 +165,56 @@ public final class GpsService extends Service implements LocationListener {
         if(!active)return;
         if(LocationManager.NETWORK_PROVIDER.equals(p)){networkRequested=false;networkStatus="Wylaczony";}
         if(LocationManager.GPS_PROVIDER.equals(p)){gpsRequested=false;state="TYLKO NETWORK";}
-        if(!gpsRequested&&!networkRequested)finish(bestAvailable(),"DOSTAWCY OFF");
-        else if(!gpsRequested){Location l=freshNetwork();if(l!=null)finish(l,"PRZYBLIZONA");}
+        if(!gpsRequested&&!networkRequested)state="BRAK DOSTAWCY";
     }
     @Override public void onProviderEnabled(String p){}
     @Override public void onStatusChanged(String p,int status,Bundle extras){}
+    private void scheduleManual(){
+        h.removeCallbacks(manualTimeout);h.postDelayed(manualTimeout,limitMs);
+    }
+    private void scheduleSms(){
+        h.removeCallbacks(timeout);h.removeCallbacks(coarseCheck);
+        long remaining=Math.max(1,requestAt+limitMs-SystemClock.elapsedRealtime());
+        h.postDelayed(timeout,remaining);h.postDelayed(coarseCheck,Math.max(0,requestAt+30000-SystemClock.elapsedRealtime()));
+    }
+    private void ensureLock(){
+        if(lock!=null&&!senders.isEmpty()){
+            if(lock.isHeld())lock.release();
+            lock.acquire(Math.max(30000,requestAt+limitMs-SystemClock.elapsedRealtime()+15000));
+        }
+    }
+    private void retryProviders(){
+        if(lm==null||closing)return;
+        lastRestart=lastGpsCallback=SystemClock.elapsedRealtime();
+        restarts++;Store.log(this,"Ponowienie GPS #"+restarts);
+        try{lm.removeUpdates(this);}catch(RuntimeException ignored){}
+        try{lm.unregisterGnssStatusCallback(gnss);}catch(RuntimeException ignored){}
+        gpsRequested=networkRequested=false;st=new Stabilizer();lastFixAt=0;accuracy=Float.NaN;samples=0;sats=new Sat[0];
+        try{
+            if(lm.isProviderEnabled(LocationManager.GPS_PROVIDER)){
+                try{lm.registerGnssStatusCallback(gnss,h);}catch(RuntimeException ignored){}
+                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER,1000,0,this,Looper.getMainLooper());gpsRequested=true;state="PONOWIENIE";
+            }else state="GPS WYLACZONY";
+        }catch(RuntimeException e){state="BLAD GPS";}
+        try{
+            if(lm.getAllProviders().contains(LocationManager.NETWORK_PROVIDER)&&lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)){
+                lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER,15000,0,this,Looper.getMainLooper());networkRequested=true;
+            }
+        }catch(RuntimeException ignored){}
+    }
+    private void completeRequests(Location l,String why){
+        if(l!=null&&l.getElapsedRealtimeNanos()/1000000L<requestAt)l=null;
+        if(l!=null)Store.save(this,l);
+        if(!manual){finish(l,why);return;}
+        String msg=l==null?"GPS: "+why+"; brak nowej pozycji":locationMessage(l,why);
+        for(String n:senders){
+            Location prior=preliminary.get(n);
+            if(prior==null || (l!=null && l.getAccuracy()<prior.getAccuracy()*.8f))SmsReceiver.reply(this,n,msg);
+        }
+        senders.clear();preliminary.clear();h.removeCallbacks(timeout);h.removeCallbacks(coarseCheck);
+        if(lock!=null&&lock.isHeld())lock.release();
+        Store.log(this,"SMS zakonczony; diagnostyka trwa");
+    }
     private void finish(Location l,String why) {
         if(closing)return;closing=true;
         lastDuration=active?SystemClock.elapsedRealtime()-started:0;
@@ -171,7 +232,7 @@ public final class GpsService extends Service implements LocationListener {
             if(prior==null || "ANULOWANO".equals(why) || (l!=null && l.getAccuracy()<prior.getAccuracy()*0.8f))SmsReceiver.reply(this,n,msg);
         }
         preliminary.clear();
-        senders.clear();manual=false;
+        senders.clear();manual=false;diagnostic=false;
         Store.log(this,"Koniec: "+state+"; "+lastDiagnostic);
         stopForeground(true);stopSelf();
     }
@@ -179,7 +240,7 @@ public final class GpsService extends Service implements LocationListener {
         h.removeCallbacksAndMessages(null);
         if(lm!=null){try{lm.removeUpdates(this);}catch(RuntimeException ignored){}try{lm.unregisterGnssStatusCallback(gnss);}catch(RuntimeException ignored){}lm=null;}
         if(lock!=null){if(lock.isHeld())lock.release();lock=null;}
-        active=false;
+        active=false;diagnostic=false;
     }
     @Override public void onDestroy(){cleanup();stopForeground(true);super.onDestroy();}
 }

@@ -12,13 +12,14 @@ import java.util.*;
 public final class MainActivity extends Activity {
     final Handler h=new Handler(Looper.getMainLooper());
     LinearLayout root; TextView title,summary; Graph graph; int page=0;
-    float down; boolean manual=false;
+    float down; boolean manual=false,asked=false;
     final int bg=0xff08111d, cyan=0xff27d9ee, light=0xffe8f0ff, muted=0xff9aacbd;
     final Runnable refresh=new Runnable(){public void run(){update();h.postDelayed(this,1000);}};
     @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(bg);show(0);}
-    @Override public void onResume(){super.onResume();h.post(refresh);}
+    @Override public void onResume(){super.onResume();h.post(refresh);if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED){manual=true;command("GPS");}else if(!asked){asked=true;ask();}}
     @Override public void onPause(){h.removeCallbacks(refresh);super.onPause();}
-    // Manual diagnostic continues with screen off, bounded by the same timeout. Stop explicitly via the button.
+    @Override public void onStop(){if(manual&&GpsService.active)command("GPS STOP");manual=false;super.onStop();}
+    @Override public void onRequestPermissionsResult(int request,String[] p,int[] grants){super.onRequestPermissionsResult(request,p,grants);if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED){manual=true;command("GPS");}}
     boolean permissions(){for(String p:new String[]{Manifest.permission.RECEIVE_SMS,Manifest.permission.SEND_SMS,Manifest.permission.ACCESS_FINE_LOCATION})if(checkSelfPermission(p)!=PackageManager.PERMISSION_GRANTED)return false;return true;}
     void ask(){requestPermissions(new String[]{Manifest.permission.RECEIVE_SMS,Manifest.permission.SEND_SMS,Manifest.permission.ACCESS_FINE_LOCATION},1);}
     void command(String c){try{startForegroundService(new Intent(this,GpsService.class).putExtra("cmd",c));}catch(RuntimeException e){Toast.makeText(this,"Nie mozna uruchomic GPS",Toast.LENGTH_SHORT).show();}}
@@ -27,7 +28,7 @@ public final class MainActivity extends Activity {
     Button button(String s,Runnable r){Button b=new Button(this);b.setText(s);b.setTextSize(12);b.setAllCaps(false);b.setOnClickListener(v->r.run());return b;}
     void show(int p){
         page=p;root=new LinearLayout(this);root.setOrientation(1);root.setPadding(dp(6),dp(4),dp(6),dp(4));root.setBackgroundColor(bg);setContentView(root);
-        title=text(new String[]{"GPS 0.1.3","SYGNAL GNSS","NIEBO","HISTORIA"}[p],14,cyan);root.addView(title);
+        title=text(new String[]{"GPS 0.1.4","SYGNAL GNSS","NIEBO","HISTORIA"}[p],14,cyan);root.addView(title);
         summary=text("",15,light);root.addView(summary);
         graph=null;
         if(p==0){
@@ -59,24 +60,20 @@ public final class MainActivity extends Activity {
         String acc=Float.isNaN(GpsService.accuracy)?"--":Math.round(GpsService.accuracy)+" m";
         long sec=GpsService.active?(SystemClock.elapsedRealtime()-GpsService.started)/1000:GpsService.lastDuration/1000;
         if(page==0)summary.setText((enabled&&permissions()?"SMS: GOTOWY":"SMS: skonfiguruj")+"\n"+GpsService.state+"\nNET: "+GpsService.networkStatus+"\nBateria "+Store.battery(this)+"%");
-        else if(page<3)summary.setText((GpsService.active?GpsService.state:"GPS OFF")+"  "+acc+"\nWid. "+GpsService.visible+" / uzyw. "+GpsService.used+"\n"+sec+"/"+GpsService.limitMs/1000+"s | fix "+(GpsService.firstFix==0?"--":GpsService.firstFix/1000+"s")+"\nOdczyty "+GpsService.raw+" / odrz. "+GpsService.rejected+"\nSygnal "+GpsService.signalCount+" / max "+Math.round(GpsService.strongest)+" dBHz\nNET: "+GpsService.networkStatus);
+        else if(page<3)summary.setText((GpsService.active?GpsService.state:"GPS OFF / ostatni")+"  "+acc+"\nWid. "+GpsService.visible+" / uzyw. "+GpsService.used+"\n"+sec+"/"+GpsService.limitMs/1000+"s | fix "+(GpsService.firstFix==0?"--":GpsService.firstFix/1000+"s")+"\nOdczyty "+GpsService.raw+" / odrz. "+GpsService.rejected+"\nSygnal "+GpsService.signalCount+" / max "+Math.round(GpsService.strongest)+" dBHz | R "+GpsService.restarts+"\nNET: "+GpsService.networkStatus);
         else summary.setText("Zdarzenia lokalne");
         if(graph!=null)graph.invalidate();
     }
     void settings(){
         LinearLayout form=new LinearLayout(this);form.setOrientation(1);form.setPadding(dp(12),0,dp(12),0);
-        form.addView(text("SMS z dowolnego numeru. Wymagany wspolny PIN.",12,light));
-        EditText pin=new EditText(this);pin.setHint("PIN (6-12 cyfr)");pin.setInputType(18);pin.setText(Store.prefs(this).getString("pin",""));form.addView(pin);
-        form.addView(text("Komenda: GPS + spacja + PIN",12,muted));
-        CheckBox en=new CheckBox(this);en.setText("Udostepniaj GPS przez SMS");en.setChecked(Store.prefs(this).getBoolean("enabled",false));form.addView(en);
+        form.addView(text("UWAGA: kazdy znajacy numer zegarka moze otrzymac jego pozycje. Wlacz tylko swiadomie.",12,light));
+        CheckBox en=new CheckBox(this);en.setText("Zezwol na SMS GPS bez PIN");en.setChecked(Store.smsReady(this));form.addView(en);
         form.addView(text("Limit GPS (minuty)",12,light));
         Spinner duration=new Spinner(this);String[] choices={"5","10","15","20"};duration.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,choices));int saved=Store.prefs(this).getInt("timeoutMinutesV2",15);duration.setSelection(saved==5?0:saved==10?1:saved==20?3:2);form.addView(duration);
         ScrollView sc=new ScrollView(this);sc.addView(form);
         AlertDialog d=new AlertDialog.Builder(this).setTitle("Ustawienia").setView(sc).setNegativeButton("Anuluj",null).setNeutralButton("Uprawnienia",(a,b)->ask()).setPositiveButton("Zapisz",null).create();
         d.setOnShowListener(a->d.getButton(-1).setOnClickListener(v->{
-            String code=pin.getText().toString().trim();
-            if((en.isChecked()||!code.isEmpty())&&!code.matches("[0-9]{6,12}")){pin.setError("Wpisz 6-12 cyfr");return;}
-            Store.prefs(this).edit().remove("numbers").putString("pin",code).putBoolean("enabled",en.isChecked()).putInt("timeoutMinutesV2",Integer.parseInt(choices[duration.getSelectedItemPosition()])).apply();d.dismiss();if(en.isChecked()&&!permissions())ask();update();
+            Store.prefs(this).edit().remove("numbers").remove("pin").putBoolean("openSmsConsent",en.isChecked()).putInt("timeoutMinutesV2",Integer.parseInt(choices[duration.getSelectedItemPosition()])).apply();d.dismiss();if(en.isChecked()&&!permissions())ask();update();
         }));d.show();
     }
     final class Graph extends View {
