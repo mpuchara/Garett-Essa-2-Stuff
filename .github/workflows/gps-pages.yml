@@ -1,0 +1,25 @@
+name: GPS Locator Pages
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['index.html','.github/workflows/gps-pages.yml']
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - run: mkdir -p site && cp index.html site/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - uses: actions/deploy-pages@v4
+        id: deployment

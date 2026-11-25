@@ -1,0 +1,31 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'pl.homemind.garettgps'
+    compileSdk 34
+    defaultConfig {
+        applicationId 'pl.homemind.garettgps'
+        minSdk 26
+        targetSdk 27
+        versionCode 1
+        versionName '0.1.0'
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
+    signingConfigs {
+        if (System.getenv('GPS_KEYSTORE')) {
+            release {
+                storeFile file(System.getenv('GPS_KEYSTORE'))
+                storePassword System.getenv('GPS_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('GPS_KEY_ALIAS')
+                keyPassword System.getenv('GPS_KEY_PASSWORD')
+                enableV1Signing true
+                enableV2Signing true
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig System.getenv('GPS_KEYSTORE') ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+}

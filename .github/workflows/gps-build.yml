@@ -1,0 +1,49 @@
+name: GPS Locator APK
+on:
+  push:
+    branches: [main]
+    paths: ['gps-locator/**', '.github/workflows/gps-build.yml', 'index.html']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager 'platforms;android-34' 'build-tools;34.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: Build APK
+        working-directory: gps-locator
+        env:
+          KEYSTORE_B64: ${{ secrets.GPS_KEYSTORE_B64 }}
+          GPS_KEYSTORE_PASSWORD: ${{ secrets.GPS_KEYSTORE_PASSWORD }}
+          GPS_KEY_ALIAS: ${{ secrets.GPS_KEY_ALIAS }}
+          GPS_KEY_PASSWORD: ${{ secrets.GPS_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            export GPS_KEYSTORE="$RUNNER_TEMP/gps-signing.jks"
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$GPS_KEYSTORE"
+          fi
+          gradle --no-daemon :app:assembleRelease
+          mkdir -p ../dist
+          cp app/build/outputs/apk/release/app-release.apk ../dist/Garett-GPS-Locator.apk
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --min-sdk-version 26 ../dist/Garett-GPS-Locator.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Garett-GPS-Locator
+          path: dist/Garett-GPS-Locator.apk
+      - name: Publish release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view gps-v0.1.0 >/dev/null 2>&1 || gh release create gps-v0.1.0 --title 'Garett GPS Locator 0.1.0' --notes 'Experimental Android 8.1 build; physical watch testing pending.' --prerelease
+          gh release upload gps-v0.1.0 dist/Garett-GPS-Locator.apk --clobber
