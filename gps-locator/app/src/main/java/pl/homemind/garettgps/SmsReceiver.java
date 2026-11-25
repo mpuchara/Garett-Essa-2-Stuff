@@ -37,7 +37,7 @@ public final class SmsReceiver extends BroadcastReceiver {
         }
         Store.log(c,"SMS: "+cmd);
         if(cmd.equals("GPS STATUS")) {
-            reply(c,sender,"GPS "+(GpsService.active?"POMIAR":"GOTOWY")+"; bateria "+Store.battery(c)+"%");
+            reply(c,sender,"GPS "+(GpsService.active?"POMIAR":"GOTOWY")+"; bateria "+Store.battery(c)+"%; "+(GpsService.active?("sat "+GpsService.visible+"/"+GpsService.used+"; odczyty "+GpsService.raw):Store.prefs(c).getString("lastDiagnostic","brak pomiaru")));
             return;
         }
         if(cmd.equals("GPS LAST")) { reply(c,sender,Store.last(c)); return; }
