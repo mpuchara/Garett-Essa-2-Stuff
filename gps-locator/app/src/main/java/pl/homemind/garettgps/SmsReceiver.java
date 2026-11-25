@@ -30,6 +30,7 @@ public final class SmsReceiver extends BroadcastReceiver {
             if(prev!=null && now-prev<15000 && !cmd.equals("GPS STOP")) return;
             recent.put(key,now);
         }
+        Store.prefs(c).edit().putLong("lastSmsCommand",System.currentTimeMillis()).apply();
         Store.log(c,"SMS: "+cmd);
         if(cmd.equals("GPS STATUS")) {
             reply(c,sender,"GPS "+(GpsService.active?"POMIAR":"GOTOWY")+"; bateria "+Store.battery(c)+"%; "+(GpsService.active?("sat "+GpsService.visible+"/"+GpsService.used+"; max "+Math.round(GpsService.strongest)+"dBHz; odczyty "+GpsService.raw+"; NET "+GpsService.networkStatus):Store.prefs(c).getString("lastDiagnostic","brak pomiaru")));

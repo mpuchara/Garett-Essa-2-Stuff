@@ -18,7 +18,7 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle b){super.onCreate(b);getWindow().setStatusBarColor(bg);show(0);}
     @Override public void onResume(){super.onResume();h.post(refresh);if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED){manual=true;command("GPS");}else if(!asked){asked=true;ask();}}
     @Override public void onPause(){h.removeCallbacks(refresh);super.onPause();}
-    @Override public void onStop(){if(manual&&GpsService.active)command("GPS STOP");manual=false;super.onStop();}
+    @Override public void onStop(){if(manual)command("GPS STOP");manual=false;super.onStop();}
     @Override public void onRequestPermissionsResult(int request,String[] p,int[] grants){super.onRequestPermissionsResult(request,p,grants);if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED){manual=true;command("GPS");}}
     boolean permissions(){for(String p:new String[]{Manifest.permission.RECEIVE_SMS,Manifest.permission.SEND_SMS,Manifest.permission.ACCESS_FINE_LOCATION})if(checkSelfPermission(p)!=PackageManager.PERMISSION_GRANTED)return false;return true;}
     void ask(){requestPermissions(new String[]{Manifest.permission.RECEIVE_SMS,Manifest.permission.SEND_SMS,Manifest.permission.ACCESS_FINE_LOCATION},1);}
@@ -28,7 +28,7 @@ public final class MainActivity extends Activity {
     Button button(String s,Runnable r){Button b=new Button(this);b.setText(s);b.setTextSize(12);b.setAllCaps(false);b.setOnClickListener(v->r.run());return b;}
     void show(int p){
         page=p;root=new LinearLayout(this);root.setOrientation(1);root.setPadding(dp(6),dp(4),dp(6),dp(4));root.setBackgroundColor(bg);setContentView(root);
-        title=text(new String[]{"GPS 0.1.4","SYGNAL GNSS","NIEBO","HISTORIA"}[p],14,cyan);root.addView(title);
+        title=text(new String[]{"GPS 0.1.5","SYGNAL GNSS","NIEBO","HISTORIA"}[p],14,cyan);root.addView(title);
         summary=text("",15,light);root.addView(summary);
         graph=null;
         if(p==0){
@@ -68,6 +68,13 @@ public final class MainActivity extends Activity {
         LinearLayout form=new LinearLayout(this);form.setOrientation(1);form.setPadding(dp(12),0,dp(12),0);
         form.addView(text("UWAGA: kazdy znajacy numer zegarka moze otrzymac jego pozycje. Wlacz tylko swiadomie.",12,light));
         CheckBox en=new CheckBox(this);en.setText("Zezwol na SMS GPS bez PIN");en.setChecked(Store.smsReady(this));form.addView(en);
+        form.addView(text("Autostart SMS: systemowy\nBateria: "+(BootReceiver.unrestricted(this)?"bez optymalizacji":"optymalizacja aktywna"),12,muted));
+        long boot=Store.prefs(this).getLong("lastSystemStart",0);
+        form.addView(text(boot==0?"Restart jeszcze nie sprawdzony":"Ostatni start: "+new java.text.SimpleDateFormat("dd.MM HH:mm",Locale.ROOT).format(new Date(boot)),12,muted));
+        form.addView(button("Ustawienia baterii",()->{
+            try{startActivity(new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));}
+            catch(RuntimeException e){try{startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,android.net.Uri.parse("package:"+getPackageName())));}catch(RuntimeException ignored){Toast.makeText(this,"Brak ustawien systemowych",Toast.LENGTH_SHORT).show();}}
+        }));
         form.addView(text("Limit GPS (minuty)",12,light));
         Spinner duration=new Spinner(this);String[] choices={"5","10","15","20"};duration.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,choices));int saved=Store.prefs(this).getInt("timeoutMinutesV2",15);duration.setSelection(saved==5?0:saved==10?1:saved==20?3:2);form.addView(duration);
         ScrollView sc=new ScrollView(this);sc.addView(form);
