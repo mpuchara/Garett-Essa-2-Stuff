@@ -27,7 +27,7 @@ public final class MainActivity extends Activity {
     Button button(String s,Runnable r){Button b=new Button(this);b.setText(s);b.setTextSize(12);b.setAllCaps(false);b.setOnClickListener(v->r.run());return b;}
     void show(int p){
         page=p;root=new LinearLayout(this);root.setOrientation(1);root.setPadding(dp(6),dp(4),dp(6),dp(4));root.setBackgroundColor(bg);setContentView(root);
-        title=text(new String[]{"GPS 0.1.2","SYGNAL GNSS","NIEBO","HISTORIA"}[p],14,cyan);root.addView(title);
+        title=text(new String[]{"GPS 0.1.3","SYGNAL GNSS","NIEBO","HISTORIA"}[p],14,cyan);root.addView(title);
         summary=text("",15,light);root.addView(summary);
         graph=null;
         if(p==0){
@@ -58,8 +58,8 @@ public final class MainActivity extends Activity {
         boolean enabled=Store.smsReady(this);
         String acc=Float.isNaN(GpsService.accuracy)?"--":Math.round(GpsService.accuracy)+" m";
         long sec=GpsService.active?(SystemClock.elapsedRealtime()-GpsService.started)/1000:GpsService.lastDuration/1000;
-        if(page==0)summary.setText((enabled&&permissions()?"SMS: GOTOWY":"SMS: skonfiguruj")+"\n"+GpsService.state+"\nBateria "+Store.battery(this)+"%");
-        else if(page<3)summary.setText((GpsService.active?GpsService.state:"GPS OFF")+"  "+acc+"\nWid. "+GpsService.visible+" / uzyw. "+GpsService.used+"\n"+sec+"/"+GpsService.limitMs/1000+"s | fix "+(GpsService.firstFix==0?"--":GpsService.firstFix/1000+"s")+"\nOdczyty "+GpsService.raw+" / odrz. "+GpsService.rejected+"\nSygnal "+GpsService.signalCount+" / max "+Math.round(GpsService.strongest)+" dBHz");
+        if(page==0)summary.setText((enabled&&permissions()?"SMS: GOTOWY":"SMS: skonfiguruj")+"\n"+GpsService.state+"\nNET: "+GpsService.networkStatus+"\nBateria "+Store.battery(this)+"%");
+        else if(page<3)summary.setText((GpsService.active?GpsService.state:"GPS OFF")+"  "+acc+"\nWid. "+GpsService.visible+" / uzyw. "+GpsService.used+"\n"+sec+"/"+GpsService.limitMs/1000+"s | fix "+(GpsService.firstFix==0?"--":GpsService.firstFix/1000+"s")+"\nOdczyty "+GpsService.raw+" / odrz. "+GpsService.rejected+"\nSygnal "+GpsService.signalCount+" / max "+Math.round(GpsService.strongest)+" dBHz\nNET: "+GpsService.networkStatus);
         else summary.setText("Zdarzenia lokalne");
         if(graph!=null)graph.invalidate();
     }

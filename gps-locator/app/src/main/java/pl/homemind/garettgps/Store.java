@@ -34,12 +34,12 @@ final class Store {
     }
     static void save(Context c,Location l) {
         prefs(c).edit().putString("last",String.format(Locale.US,"%.6f,%.6f",l.getLatitude(),l.getLongitude()))
-          .putFloat("acc",l.getAccuracy()).putLong("time",l.getTime()).apply();
+          .putFloat("acc",l.getAccuracy()).putLong("time",l.getTime()).putString("lastProvider",l.getProvider()).apply();
     }
     static String last(Context c) {
         android.content.SharedPreferences p=prefs(c);
         String s=p.getString("last","");
         if(s.isEmpty()) return "GPS LAST: brak zapisanej pozycji";
-        return "GPS LAST (historyczna) "+new java.text.SimpleDateFormat("dd.MM HH:mm",Locale.ROOT).format(new Date(p.getLong("time",0)))+" +/-"+Math.round(p.getFloat("acc",0))+"m\nhttps://maps.google.com/?q="+s;
+        return "LAST "+p.getString("lastProvider","nieznane")+" (historyczna) "+new java.text.SimpleDateFormat("dd.MM HH:mm",Locale.ROOT).format(new Date(p.getLong("time",0)))+" +/-"+Math.round(p.getFloat("acc",0))+"m\nhttps://maps.google.com/?q="+s;
     }
 }
