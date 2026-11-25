@@ -31,16 +31,15 @@ public final class GpsService extends Service implements LocationListener {
     private PowerManager.WakeLock lock;
     private Stabilizer st;
     private boolean fast,manual,closing,gpsRequested,networkRequested;
-    private long lastGpsCallback,lastRestart,requestAt;
-    private final Runnable manualTimeout=()->{manual=false;diagnostic=false;if(senders.isEmpty())finish(null,"LIMIT TESTU");};
+    private long lastGpsCallback,lastRestart,requestAt,latestRequestAt,lastLogAt;
     private Location networkFix;
     private final Map<String,Location> preliminary=new HashMap<>();
     private final Runnable timeout=()->completeRequests(bestAvailable(),"TIMEOUT");
     private final Runnable coarseCheck=()->sendPreliminary();
     private final Runnable tick=new Runnable(){public void run(){
         if(!active || closing)return;
-        Store.log(GpsService.this,"GPS "+((SystemClock.elapsedRealtime()-started)/1000)+"s: sat "+visible+"/"+used+", sygnal "+signalCount+", max "+Math.round(strongest)+" dBHz, odczyty "+raw+", odrzucone "+rejected+(st==null?"":", "+st.reason));
         long now=SystemClock.elapsedRealtime();
+        if(now-lastLogAt>=30000){lastLogAt=now;Store.log(GpsService.this,"GPS "+((SystemClock.elapsedRealtime()-started)/1000)+"s: sat "+visible+"/"+used+", sygnal "+signalCount+", max "+Math.round(strongest)+" dBHz, odczyty "+raw+", odrzucone "+rejected+(st==null?"":", "+st.reason));}
         if(now-lastRestart>=90000 && (!gpsRequested || now-lastGpsCallback>=90000)) retryProviders();
         if(lastFixAt>0 && now-lastFixAt>10000 && gpsRequested){state="UTRATA FIX";accuracy=Float.NaN;}
         h.postDelayed(this,5000);
@@ -65,7 +64,7 @@ public final class GpsService extends Service implements LocationListener {
         boolean local=sender==null;
         if(!local && !Store.allowed(this,sender)){if(!active)stopSelf();return START_NOT_STICKY;}
         if("GPS STOP".equals(cmd)) {
-            if(local){manual=false;diagnostic=false;h.removeCallbacks(manualTimeout);if(senders.isEmpty())finish(null,"ANULOWANO");}
+            if(local){manual=false;diagnostic=false;if(senders.isEmpty())finish(null,"ANULOWANO");}
             else {senders.remove(sender);preliminary.remove(sender);SmsReceiver.reply(this,sender,"GPS: anulowano zapytanie");if(!manual&&senders.isEmpty())finish(null,"ANULOWANO");}
             return START_NOT_STICKY;
         }
@@ -73,11 +72,10 @@ public final class GpsService extends Service implements LocationListener {
             if(senders.size()>=8 && !senders.contains(sender)){SmsReceiver.reply(this,sender,"GPS: zajety");return START_NOT_STICKY;}
             if(senders.isEmpty()){requestAt=SystemClock.elapsedRealtime();fast="GPS FAST".equals(cmd);}
             else if(!"GPS FAST".equals(cmd))fast=false;
-            senders.add(sender);
+            senders.add(sender);latestRequestAt=SystemClock.elapsedRealtime();
         } else {manual=true;diagnostic=true;}
         if(active) {
-            if(local)scheduleManual();
-            else {scheduleSms();ensureLock();}
+            if(!local) {scheduleSms();ensureLock();}
             return START_NOT_STICKY;
         }
         fast="GPS FAST".equals(cmd);
@@ -92,7 +90,7 @@ public final class GpsService extends Service implements LocationListener {
             Store.log(this,"Dostawcy: "+lm.getAllProviders());
             lock=((PowerManager)getSystemService(POWER_SERVICE)).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"GarettGPS:session");
             lock.setReferenceCounted(false);ensureLock();
-            if(manual)scheduleManual();if(!senders.isEmpty())scheduleSms();h.postDelayed(tick,5000L);
+            if(!senders.isEmpty())scheduleSms();h.postDelayed(tick,5000L);
             try{
                 if(lm.getAllProviders().contains(LocationManager.NETWORK_PROVIDER) && lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)){
                     lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER,15000,0,this,Looper.getMainLooper());
@@ -121,7 +119,7 @@ public final class GpsService extends Service implements LocationListener {
         if(firstFix==0){firstFix=elapsed;Store.log(this,"Pierwszy fix: "+elapsed/1000+" s");}
         boolean stable=st.stable(10) || (elapsed>=30000 && st.stable(20)) || (elapsed>=90000 && st.stable(35));
         if(stable){state="FIX";if(raw==6||raw%15==0)Store.save(this,l);}
-        if(!senders.isEmpty() && lastFixAt>=requestAt && ((fast && l.getAccuracy()<=20)||stable))
+        if(!senders.isEmpty() && lastFixAt>=latestRequestAt && ((fast && l.getAccuracy()<=20)||stable))
             completeRequests(l,l.getAccuracy()<=20?"OK":"SLABY");
     }
     private boolean validNetwork(Location l){
@@ -141,7 +139,7 @@ public final class GpsService extends Service implements LocationListener {
         boolean first=networkFix==null;
         networkFix=new Location(l);networkStatus="OK +/-"+Math.round(l.getAccuracy())+"m";
         if(first)Store.log(this,"NETWORK pierwszy odczyt: "+networkStatus);
-        if(!gpsRequested && !senders.isEmpty() && l.getElapsedRealtimeNanos()/1000000L>=requestAt){completeRequests(networkFix,"PRZYBLIZONA");return;}
+        if(!gpsRequested && !senders.isEmpty() && l.getElapsedRealtimeNanos()/1000000L>=latestRequestAt){completeRequests(networkFix,"PRZYBLIZONA");return;}
         sendPreliminary();
     }
     private String locationMessage(Location l,String why){
@@ -152,12 +150,11 @@ public final class GpsService extends Service implements LocationListener {
     }
     private void sendPreliminary(){
         if(!active||closing||senders.isEmpty()||SystemClock.elapsedRealtime()-requestAt<30000)return;
-        Location l=freshNetwork();if(l==null||l.getElapsedRealtimeNanos()/1000000L<requestAt)return;
+        Location l=freshNetwork();if(l==null||l.getElapsedRealtimeNanos()/1000000L<latestRequestAt)return;
         Location gps=st==null?null:st.recentBest();
         if(gps!=null&&gps.getAccuracy()<=l.getAccuracy())return;
         for(String n:senders)if(!preliminary.containsKey(n)&&Store.allowed(this,n)){
-            SmsReceiver.reply(this,n,locationMessage(l,"PRZYBLIZONA"));
-            preliminary.put(n,new Location(l));Store.log(this,"Wyslano przyblizona pozycje NETWORK");
+            if(SmsReceiver.reply(this,n,locationMessage(l,"PRZYBLIZONA"))){preliminary.put(n,new Location(l));Store.log(this,"Przekazano przyblizona pozycje NETWORK do modemu");}
         }
         Store.save(this,l);
     }
@@ -169,9 +166,6 @@ public final class GpsService extends Service implements LocationListener {
     }
     @Override public void onProviderEnabled(String p){}
     @Override public void onStatusChanged(String p,int status,Bundle extras){}
-    private void scheduleManual(){
-        h.removeCallbacks(manualTimeout);h.postDelayed(manualTimeout,limitMs);
-    }
     private void scheduleSms(){
         h.removeCallbacks(timeout);h.removeCallbacks(coarseCheck);
         long remaining=Math.max(1,requestAt+limitMs-SystemClock.elapsedRealtime());
@@ -203,7 +197,7 @@ public final class GpsService extends Service implements LocationListener {
         }catch(RuntimeException ignored){}
     }
     private void completeRequests(Location l,String why){
-        if(l!=null&&l.getElapsedRealtimeNanos()/1000000L<requestAt)l=null;
+        if(l!=null&&l.getElapsedRealtimeNanos()/1000000L<latestRequestAt)l=null;
         if(l!=null)Store.save(this,l);
         if(!manual){finish(l,why);return;}
         String msg=l==null?"GPS: "+why+"; brak nowej pozycji":locationMessage(l,why);

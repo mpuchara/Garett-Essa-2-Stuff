@@ -40,8 +40,8 @@ public final class SmsReceiver extends BroadcastReceiver {
             c.startForegroundService(new Intent(c,GpsService.class).putExtra("sender",sender).putExtra("cmd",cmd));
         } catch(RuntimeException e) { Store.log(c,"Nie mozna uruchomic GPS"); reply(c,sender,"GPS: blad uruchomienia"); }
     }
-    static void reply(Context c,String n,String body) {
-        if(!Store.allowed(c,n)) return;
+    static boolean reply(Context c,String n,String body) {
+        if(!Store.allowed(c,n)) return false;
         try {
             SmsManager sm=SmsManager.getDefault();
             ArrayList<String> segments=sm.divideMessage(body);
@@ -53,7 +53,7 @@ public final class SmsReceiver extends BroadcastReceiver {
             }
             if(segments.size()==1) sm.sendTextMessage(n,null,body,sent.get(0),null);
             else sm.sendMultipartTextMessage(n,null,segments,sent,null);
-            Store.log(c,"SMS przekazany do modemu");
-        } catch(RuntimeException e) { Store.log(c,"Blad SMS: "+e.getClass().getSimpleName()); }
+            Store.log(c,"SMS przekazany do modemu");return true;
+        } catch(RuntimeException e) { Store.log(c,"Blad SMS: "+e.getClass().getSimpleName());return false; }
     }
 }
