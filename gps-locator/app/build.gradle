@@ -2,6 +2,8 @@ plugins { id 'com.android.application' }
 android {
     namespace 'pl.homemind.garettgps'
     compileSdk 34
+    // Sideload-only application for legacy Android 8.1 hardware; not distributed via Google Play.
+    lint { disable 'ExpiredTargetSdkVersion' }
     defaultConfig {
         applicationId 'pl.homemind.garettgps'
         minSdk 26
