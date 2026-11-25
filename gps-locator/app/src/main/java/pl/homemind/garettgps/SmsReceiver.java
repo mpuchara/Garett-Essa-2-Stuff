@@ -22,10 +22,8 @@ public final class SmsReceiver extends BroadcastReceiver {
         }
         String cmd=body.toString().trim().replaceAll("\\s+"," ").toUpperCase(Locale.ROOT);
         String pin=Store.prefs(c).getString("pin","");
-        if(!pin.isEmpty()) {
-            if(!cmd.endsWith(" "+pin)) return;
-            cmd=cmd.substring(0,cmd.length()-pin.length()-1);
-        }
+        if(!pin.matches("[0-9]{6,12}") || !cmd.endsWith(" "+pin)) return;
+        cmd=cmd.substring(0,cmd.length()-pin.length()-1);
         if(!Arrays.asList("GPS","GPS FAST","GPS STATUS","GPS LAST","GPS STOP").contains(cmd)) return;
         long now=SystemClock.elapsedRealtime();
         String key=sender+":"+cmd;
@@ -37,7 +35,7 @@ public final class SmsReceiver extends BroadcastReceiver {
         }
         Store.log(c,"SMS: "+cmd);
         if(cmd.equals("GPS STATUS")) {
-            reply(c,sender,"GPS "+(GpsService.active?"POMIAR":"GOTOWY")+"; bateria "+Store.battery(c)+"%; "+(GpsService.active?("sat "+GpsService.visible+"/"+GpsService.used+"; odczyty "+GpsService.raw):Store.prefs(c).getString("lastDiagnostic","brak pomiaru")));
+            reply(c,sender,"GPS "+(GpsService.active?"POMIAR":"GOTOWY")+"; bateria "+Store.battery(c)+"%; "+(GpsService.active?("sat "+GpsService.visible+"/"+GpsService.used+"; max "+Math.round(GpsService.strongest)+"dBHz; odczyty "+GpsService.raw):Store.prefs(c).getString("lastDiagnostic","brak pomiaru")));
             return;
         }
         if(cmd.equals("GPS LAST")) { reply(c,sender,Store.last(c)); return; }

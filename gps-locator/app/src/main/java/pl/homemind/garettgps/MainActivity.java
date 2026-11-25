@@ -27,7 +27,7 @@ public final class MainActivity extends Activity {
     Button button(String s,Runnable r){Button b=new Button(this);b.setText(s);b.setTextSize(12);b.setAllCaps(false);b.setOnClickListener(v->r.run());return b;}
     void show(int p){
         page=p;root=new LinearLayout(this);root.setOrientation(1);root.setPadding(dp(6),dp(4),dp(6),dp(4));root.setBackgroundColor(bg);setContentView(root);
-        title=text(new String[]{"GPS 0.1.1","SYGNAL GNSS","NIEBO","HISTORIA"}[p],14,cyan);root.addView(title);
+        title=text(new String[]{"GPS 0.1.2","SYGNAL GNSS","NIEBO","HISTORIA"}[p],14,cyan);root.addView(title);
         summary=text("",15,light);root.addView(summary);
         graph=null;
         if(p==0){
@@ -55,30 +55,28 @@ public final class MainActivity extends Activity {
     }
     void update(){
         if(summary==null)return;
-        boolean enabled=Store.prefs(this).getBoolean("enabled",false);
+        boolean enabled=Store.smsReady(this);
         String acc=Float.isNaN(GpsService.accuracy)?"--":Math.round(GpsService.accuracy)+" m";
         long sec=GpsService.active?(SystemClock.elapsedRealtime()-GpsService.started)/1000:GpsService.lastDuration/1000;
         if(page==0)summary.setText((enabled&&permissions()?"SMS: GOTOWY":"SMS: skonfiguruj")+"\n"+GpsService.state+"\nBateria "+Store.battery(this)+"%");
-        else if(page<3)summary.setText((GpsService.active?GpsService.state:"GPS OFF")+"  "+acc+"\nWid. "+GpsService.visible+" / uzyw. "+GpsService.used+"\n"+sec+"/"+GpsService.limitMs/1000+"s | fix "+(GpsService.firstFix==0?"--":GpsService.firstFix/1000+"s")+"\nOdczyty "+GpsService.raw+" / odrz. "+GpsService.rejected);
+        else if(page<3)summary.setText((GpsService.active?GpsService.state:"GPS OFF")+"  "+acc+"\nWid. "+GpsService.visible+" / uzyw. "+GpsService.used+"\n"+sec+"/"+GpsService.limitMs/1000+"s | fix "+(GpsService.firstFix==0?"--":GpsService.firstFix/1000+"s")+"\nOdczyty "+GpsService.raw+" / odrz. "+GpsService.rejected+"\nSygnal "+GpsService.signalCount+" / max "+Math.round(GpsService.strongest)+" dBHz");
         else summary.setText("Zdarzenia lokalne");
         if(graph!=null)graph.invalidate();
     }
     void settings(){
         LinearLayout form=new LinearLayout(this);form.setOrientation(1);form.setPadding(dp(12),0,dp(12),0);
-        EditText nums=new EditText(this);nums.setHint("+48..., +48...");nums.setText(Store.prefs(this).getString("numbers",""));nums.setInputType(android.text.InputType.TYPE_CLASS_TEXT);form.addView(text("Zaufane numery (przecinek)",12,light));form.addView(nums);
-        EditText pin=new EditText(this);pin.setHint("PIN opcjonalny");pin.setInputType(18);pin.setText(Store.prefs(this).getString("pin",""));form.addView(pin);
+        form.addView(text("SMS z dowolnego numeru. Wymagany wspolny PIN.",12,light));
+        EditText pin=new EditText(this);pin.setHint("PIN (6-12 cyfr)");pin.setInputType(18);pin.setText(Store.prefs(this).getString("pin",""));form.addView(pin);
+        form.addView(text("Komenda: GPS + spacja + PIN",12,muted));
         CheckBox en=new CheckBox(this);en.setText("Udostepniaj GPS przez SMS");en.setChecked(Store.prefs(this).getBoolean("enabled",false));form.addView(en);
         form.addView(text("Limit GPS (minuty)",12,light));
-        Spinner duration=new Spinner(this);String[] choices={"3","5","10"};duration.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,choices));int saved=Store.prefs(this).getInt("timeoutMinutes",5);duration.setSelection(saved==3?0:saved==10?2:1);form.addView(duration);
+        Spinner duration=new Spinner(this);String[] choices={"5","10","15","20"};duration.setAdapter(new ArrayAdapter<String>(this,android.R.layout.simple_spinner_dropdown_item,choices));int saved=Store.prefs(this).getInt("timeoutMinutesV2",15);duration.setSelection(saved==5?0:saved==10?1:saved==20?3:2);form.addView(duration);
         ScrollView sc=new ScrollView(this);sc.addView(form);
         AlertDialog d=new AlertDialog.Builder(this).setTitle("Ustawienia").setView(sc).setNegativeButton("Anuluj",null).setNeutralButton("Uprawnienia",(a,b)->ask()).setPositiveButton("Zapisz",null).create();
         d.setOnShowListener(a->d.getButton(-1).setOnClickListener(v->{
-            LinkedHashSet<String> valid=new LinkedHashSet<>();
-            for(String s:nums.getText().toString().split("[,;\\s]+")){if(s.isEmpty())continue;String n=Store.number(s);if(n.isEmpty()){nums.setError("Nieprawidlowy numer");return;}valid.add(n);}
             String code=pin.getText().toString().trim();
-            if(!code.isEmpty()&&!code.matches("[0-9]{4,12}")){pin.setError("4-12 cyfr");return;}
-            if(en.isChecked()&&valid.isEmpty()){nums.setError("Dodaj zaufany numer");return;}
-            Store.prefs(this).edit().putString("numbers",android.text.TextUtils.join(",",valid)).putString("pin",code).putBoolean("enabled",en.isChecked()).putInt("timeoutMinutes",Integer.parseInt(choices[duration.getSelectedItemPosition()])).apply();d.dismiss();if(en.isChecked()&&!permissions())ask();update();
+            if((en.isChecked()||!code.isEmpty())&&!code.matches("[0-9]{6,12}")){pin.setError("Wpisz 6-12 cyfr");return;}
+            Store.prefs(this).edit().remove("numbers").putString("pin",code).putBoolean("enabled",en.isChecked()).putInt("timeoutMinutesV2",Integer.parseInt(choices[duration.getSelectedItemPosition()])).apply();d.dismiss();if(en.isChecked()&&!permissions())ask();update();
         }));d.show();
     }
     final class Graph extends View {
@@ -112,10 +110,10 @@ public final class MainActivity extends Activity {
                 Arrays.sort(a=a.clone(),(s,t)->Float.compare(t.cn,s.cn));
                 int n=Math.min(20,a.length);float step=w/n,base=height-dp(26),top=dp(8);
                 if(base<=top)return;
-                float avg=0;for(GpsService.Sat s:a)avg+=s.cn;
-                for(int i=0;i<n;i++){GpsService.Sat s=a[i];float bar=Math.max(0,Math.min(1,s.cn/50))*Math.max(0,base-top);color(signal(s.cn));paint.setAlpha(s.used?255:105);
-                    c.drawRect(i*step+1,base-bar,(i+1)*step-1,base,paint);paint.setAlpha(255);label(c,""+s.id,(i+.5f)*step,base+dp(10),Math.min(step,dp(9)));}
-                label(c,String.format(Locale.US,"C/N0 %.1f dB-Hz",avg/a.length),w/2,height-dp(2),dp(11));
+                float avg=0;int positive=0;for(GpsService.Sat s:a)if(Float.isFinite(s.cn)&&s.cn>0){avg+=s.cn;positive++;}
+                for(int i=0;i<n;i++){GpsService.Sat s=a[i];float bar=Math.max(0,Math.min(1,s.cn/50))*Math.max(0,base-top);color(signal(s.cn));paint.setAlpha(s.used?255:185);
+                    if(bar>0)c.drawRect(i*step+1,base-Math.max(dp(2),bar),(i+1)*step-1,base,paint);else {color(0xff64748b);c.drawRect(i*step+1,base-dp(1),(i+1)*step-1,base,paint);}paint.setAlpha(255);label(c,""+s.id,(i+.5f)*step,base+dp(10),Math.min(step,dp(9)));}
+                label(c,positive==0?"Brak sygnalu C/N0":String.format(Locale.US,"C/N0 %.1f dB-Hz (%d)",avg/positive,positive),w/2,height-dp(2),dp(11));
             }
         }
     }

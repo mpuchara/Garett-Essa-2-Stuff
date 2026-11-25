@@ -17,9 +17,10 @@ final class Store {
     }
     static boolean allowed(Context c,String n) {
         String s=number(n);
-        if(s.isEmpty() || !prefs(c).getBoolean("enabled",false)) return false;
-        for(String x:prefs(c).getString("numbers","").split("[,;\\s]+")) if(s.equals(number(x))) return true;
-        return false;
+        return !s.isEmpty() && smsReady(c);
+    }
+    static boolean smsReady(Context c) {
+        return prefs(c).getBoolean("enabled",false) && prefs(c).getString("pin","").matches("[0-9]{6,12}");
     }
     static synchronized void log(Context c,String s) {
         String line=new java.text.SimpleDateFormat("HH:mm:ss",Locale.ROOT).format(new Date())+" "+s+"\n";

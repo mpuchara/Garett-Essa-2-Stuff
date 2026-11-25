@@ -11,8 +11,10 @@ public final class GpsService extends Service implements LocationListener {
     static volatile boolean active=false;
     static volatile String state="GPS OFF";
     static volatile float accuracy=Float.NaN;
-    static volatile long started=0,firstFix=0,limitMs=300000,lastDuration=0;
-    static volatile int raw=0,rejected=0,peakVisible=0,peakUsed=0;
+    static volatile long started=0,firstFix=0,limitMs=900000,lastDuration=0;
+    static volatile int raw=0,rejected=0,peakVisible=0,peakUsed=0,signalCount=0,peakSignalCount=0;
+    static volatile float strongest=0,peakStrongest=0;
+    static volatile long gnssUpdates=0;
     static volatile String lastDiagnostic="Brak pomiaru";
     static volatile int visible=0,used=0, samples=0;
     static volatile Sat[] sats=new Sat[0];
@@ -29,14 +31,15 @@ public final class GpsService extends Service implements LocationListener {
     private final Runnable timeout=()->finish(st==null?null:st.recentBest(),"TIMEOUT");
     private final Runnable tick=new Runnable(){public void run(){
         if(!active || closing)return;
-        Store.log(GpsService.this,"GPS "+((SystemClock.elapsedRealtime()-started)/1000)+"s: sat "+visible+"/"+used+", odczyty "+raw+", odrzucone "+rejected+(st==null?"":", "+st.reason));
+        Store.log(GpsService.this,"GPS "+((SystemClock.elapsedRealtime()-started)/1000)+"s: sat "+visible+"/"+used+", sygnal "+signalCount+", max "+Math.round(strongest)+" dBHz, odczyty "+raw+", odrzucone "+rejected+(st==null?"":", "+st.reason));
         h.postDelayed(this,30000);
     }};
     private final GnssStatus.Callback gnss=new GnssStatus.Callback() {
         @Override public void onSatelliteStatusChanged(GnssStatus g) {
-            Sat[] a=new Sat[g.getSatelliteCount()];int u=0;
-            for(int i=0;i<a.length;i++){a[i]=new Sat(g,i);if(a[i].used)u++;}
-            visible=a.length;used=u;sats=a;peakVisible=Math.max(peakVisible,visible);peakUsed=Math.max(peakUsed,used);
+            Sat[] a=new Sat[g.getSatelliteCount()];int u=0, signals=0;float max=0;
+            for(int i=0;i<a.length;i++){a[i]=new Sat(g,i);if(a[i].used)u++;if(Float.isFinite(a[i].cn)&&a[i].cn>0){signals++;max=Math.max(max,a[i].cn);}}
+            gnssUpdates++;visible=a.length;used=u;sats=a;signalCount=signals;strongest=max;
+            peakVisible=Math.max(peakVisible,visible);peakUsed=Math.max(peakUsed,used);peakSignalCount=Math.max(peakSignalCount,signals);peakStrongest=Math.max(peakStrongest,max);
         }
     };
     @Override public IBinder onBind(Intent i){return null;}
@@ -55,12 +58,12 @@ public final class GpsService extends Service implements LocationListener {
             else {senders.add(sender);finish(null,"ANULOWANO");}
             return START_NOT_STICKY;
         }
-        if(!local) senders.add(sender); else manual=true;
+        if(!local) {if(senders.size()>=8 && !senders.contains(sender)){SmsReceiver.reply(this,sender,"GPS: zbyt wiele zapytan; sprobuj pozniej");return START_NOT_STICKY;} senders.add(sender);} else manual=true;
         if(active) {if(!"GPS FAST".equals(cmd))fast=false;return START_NOT_STICKY;}
         fast="GPS FAST".equals(cmd);
         active=true;closing=false;state="SZUKANIE";accuracy=Float.NaN;started=SystemClock.elapsedRealtime();
-        firstFix=0;visible=used=samples=raw=rejected=peakVisible=peakUsed=0;sats=new Sat[0];st=new Stabilizer();
-        limitMs=Math.max(180000L,Math.min(600000L,Store.prefs(this).getInt("timeoutMinutes",5)*60000L));
+        firstFix=0;visible=used=samples=raw=rejected=peakVisible=peakUsed=signalCount=peakSignalCount=0;strongest=peakStrongest=0;gnssUpdates=0;sats=new Sat[0];st=new Stabilizer();
+        limitMs=Math.max(300000L,Math.min(1200000L,Store.prefs(this).getInt("timeoutMinutesV2",15)*60000L));
         Store.log(this,"Start GPS, limit "+limitMs/1000+"s");
         try {
             if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) throw new SecurityException();
@@ -90,7 +93,7 @@ public final class GpsService extends Service implements LocationListener {
     private void finish(Location l,String why) {
         if(closing)return;closing=true;
         lastDuration=active?SystemClock.elapsedRealtime()-started:0;
-        lastDiagnostic="GPS "+lastDuration/1000+"s; sat max "+peakVisible+"/"+peakUsed+"; odczyty "+raw+"; odrz. "+rejected;
+        lastDiagnostic="GPS "+lastDuration/1000+"s; sat max "+peakVisible+"/"+peakUsed+"; sygnal max "+peakSignalCount+"/"+Math.round(peakStrongest)+"dBHz; odczyty "+raw+"; odrz. "+rejected;
         Store.prefs(this).edit().putString("lastDiagnostic",lastDiagnostic).apply();
         String msg;
         if(l!=null) {
